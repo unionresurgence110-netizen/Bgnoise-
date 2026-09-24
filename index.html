@@ -14,7 +14,7 @@ main{width:min(760px,100%);margin:auto;padding:28px 16px 44px}.brand{text-align:
 .card{background:rgba(18,24,42,.92);border:1px solid #2b3551;border-radius:22px;padding:20px;box-shadow:0 18px 60px rgba(0,0,0,.28);margin-bottom:16px}
 .drop{border:2px dashed #4d5d82;border-radius:18px;padding:25px 16px;text-align:center;cursor:pointer;background:#0e1527;transition:.2s}.drop:hover,.drop:focus-within{border-color:#7e9cff;background:#111a30}.drop strong{display:block;font-size:19px}.drop span{display:block;color:#9da8c2;margin-top:7px;font-size:14px}.drop input{display:block;width:100%;margin-top:18px}
 .fileinfo{margin-top:13px;padding:11px 12px;border-radius:12px;background:#0a0f1d;color:#cbd4e9;font-size:14px;display:none}.fileinfo.show{display:block}
-.row{display:flex;justify-content:space-between;align-items:center;gap:14px}.label{font-weight:700}.value{font-variant-numeric:tabular-nums;color:#b9c7ff}.range{width:100%;margin:18px 0 6px}.hint{color:#8f9ab4;font-size:13px;line-height:1.5}
+.row{display:flex;justify-content:space-between;align-items:center;gap:14px}.label{font-weight:700}.value{font-variant-numeric:tabular-nums;color:#b9c7ff}.range{width:100%;margin:18px 0 6px}.enhance{margin-top:22px}.hint{color:#8f9ab4;font-size:13px;line-height:1.5}
 button{border:0;border-radius:13px;padding:13px 17px;font-weight:800;font-size:15px;cursor:pointer}.primary{width:100%;background:#728cff;color:white;margin-top:16px}.primary:disabled{opacity:.45;cursor:not-allowed}.secondary{background:#202a44;color:#dfe6ff}.status{margin-top:14px;min-height:22px;color:#aeb9d2;font-size:14px}.status.err{color:#ff9b9b}.status.ok{color:#8fe0b2}
 .results{display:none}.results.show{display:block}.players{display:grid;gap:14px}.player{background:#0b1120;border:1px solid #27324d;border-radius:15px;padding:13px}.player b{display:block;margin-bottom:7px;font-size:14px}audio{width:100%}.download{display:block;text-align:center;text-decoration:none;background:#263457;color:white;border-radius:13px;padding:13px;margin-top:14px;font-weight:800}
 .badge{display:inline-block;padding:5px 9px;border-radius:99px;background:#17213a;color:#aebfff;font-size:12px;margin-top:10px}.footer{text-align:center;color:#68748f;font-size:12px;line-height:1.6;margin-top:18px}
@@ -34,7 +34,13 @@ button{border:0;border-radius:13px;padding:13px 17px;font-weight:800;font-size:1
 
     <div class="row" style="margin-top:20px"><span class="label">Noise reduction</span><span id="levelValue" class="value">40%</span></div>
     <input id="level" class="range" type="range" min="10" max="70" step="5" value="40">
-    <div class="hint">40% is a moderate setting intended to reduce fan, AC, hiss and room noise while keeping speech natural.</div>
+    <div class="hint">Lower settings are gentler and help avoid metallic/robotic artifacts. Start around 30–40% for voice.</div>
+
+    <div class="enhance">
+      <div class="row"><span class="label">Voice enhance / loudness</span><span id="boostValue" class="value">25%</span></div>
+      <input id="boost" class="range" type="range" min="0" max="100" step="5" value="25">
+      <div class="hint">Adds clean gain, voice presence and gentle compression after denoising. It does not create missing audio or remove room echo.</div>
+    </div>
 
     <button id="process" class="primary" disabled>Clean my audio</button>
     <div id="status" class="status">Select an audio file to begin.</div>
@@ -49,17 +55,18 @@ button{border:0;border-radius:13px;padding:13px 17px;font-weight:800;font-size:1
     <a id="download" class="download" download="cleanvoice-cleaned.wav">Download cleaned WAV</a>
   </section>
 
-  <div class="footer">Audio is processed locally in the browser after the model loads. Your selected recording is not uploaded to a CleanVoice server. The first load needs internet access for the processing library/model.</div>
+  <div class="footer">Audio is processed locally in the browser after the model loads. Your selected recording is not uploaded to a CleanVoice server. The first load needs internet access for the processing library/model. Note: acoustic room echo cannot be reliably removed by a single-channel denoiser without a separate echo reference.</div>
 </main>
 <script>
 const $=id=>document.getElementById(id);
 const fileInput=$('file'), processBtn=$('process'), status=$('status'), fileInfo=$('fileinfo');
-const level=$('level'), levelValue=$('levelValue'), results=$('results'), before=$('before'), after=$('after'), download=$('download');
+const level=$('level'), levelValue=$('levelValue'), boost=$('boost'), boostValue=$('boostValue'), results=$('results'), before=$('before'), after=$('after'), download=$('download');
 let selected=null, originalUrl=null, cleanedUrl=null, audioCtx=null, denoiser=null;
 
 function setStatus(msg,kind=''){status.textContent=msg;status.className='status '+kind}
 function fmtBytes(n){if(n<1024)return n+' B';let u=['KB','MB','GB'],i=-1;do{n/=1024;i++}while(n>=1024&&i<u.length-1);return n.toFixed(1)+' '+u[i]}
 level.addEventListener('input',()=>levelValue.textContent=level.value+'%');
+boost.addEventListener('input',()=>boostValue.textContent=boost.value+'%');
 fileInput.addEventListener('change',()=>{const f=fileInput.files?.[0]; if(!f)return; selectFile(f)});
 function selectFile(f){
   selected=f; results.classList.remove('show'); processBtn.disabled=false;
@@ -90,7 +97,7 @@ async function loadDenoiser(){
   const mod=await import('https://esm.sh/deepfilter-standalone@1.0.2');
   const D=mod.StandaloneDeepFilter;
   if(!D) throw new Error('DeepFilterNet3 module did not load correctly.');
-  denoiser=new D({attenuationLimit:30,postFilterBeta:0.02});
+  denoiser=new D({attenuationLimit:18,postFilterBeta:0});
   await denoiser.initialize();
   return denoiser;
 }
@@ -99,6 +106,24 @@ function makeWav(samples,sr=48000){
   const ws=(o,s)=>{for(let i=0;i<s.length;i++)view.setUint8(o+i,s.charCodeAt(i))};
   ws(0,'RIFF');view.setUint32(4,36+samples.length*2,true);ws(8,'WAVE');ws(12,'fmt ');view.setUint32(16,16,true);view.setUint16(20,1,true);view.setUint16(22,1,true);view.setUint32(24,sr,true);view.setUint32(28,sr*2,true);view.setUint16(32,2,true);view.setUint16(34,16,true);ws(36,'data');view.setUint32(40,samples.length*2,true);
   let p=44;for(let i=0;i<samples.length;i++){let x=Math.max(-1,Math.min(1,samples[i]));view.setInt16(p,x<0?x*32768:x*32767,true);p+=2}return new Blob([buffer],{type:'audio/wav'});
+}
+async function enhanceVoice(samples, sr, amount){
+  if(!amount) return samples;
+  const ctx=new OfflineAudioContext(1,samples.length,sr);
+  const buf=ctx.createBuffer(1,samples.length,sr);buf.copyToChannel(samples,0);
+  const src=ctx.createBufferSource();src.buffer=buf;
+  // Remove sub-bass rumble, then add a small speech-presence lift.
+  const hp=ctx.createBiquadFilter();hp.type='highpass';hp.frequency.value=65;hp.Q.value=.7;
+  const presence=ctx.createBiquadFilter();presence.type='peaking';presence.frequency.value=2800;presence.Q.value=.8;presence.gain.value=1.5*(amount/100);
+  const comp=ctx.createDynamicsCompressor();comp.threshold.value=-24-10*(amount/100);comp.knee.value=20;comp.ratio.value=1.8+1.2*(amount/100);comp.attack.value=.008;comp.release.value=.12;
+  const gain=ctx.createGain();gain.gain.value=Math.pow(10,(2+8*(amount/100))/20);
+  src.connect(hp).connect(presence).connect(comp).connect(gain).connect(ctx.destination);src.start();
+  const rendered=await ctx.startRendering();
+  const out=new Float32Array(rendered.length);out.set(rendered.getChannelData(0));
+  // Peak-normalize gently to avoid clipping after boost.
+  let peak=0;for(let i=0;i<out.length;i++)peak=Math.max(peak,Math.abs(out[i]));
+  if(peak>0.96){const g=.96/peak;for(let i=0;i<out.length;i++)out[i]*=g}
+  return out;
 }
 function blend(input,enhanced,wet){
   const n=Math.min(input.length,enhanced.length),out=new Float32Array(n);
@@ -113,14 +138,17 @@ processBtn.addEventListener('click',async()=>{
     setStatus('Preparing DeepFilterNet3…');
     const df=await loadDenoiser();
     const pct=Number(level.value);
-    // Moderate mapping: slider 10–70 -> attenuation 10–52 dB.
-    df.setAttenuationLimit(10+(pct-10)*0.70);
-    df.setPostFilterBeta(pct>=55?0.015:0.02);
+    // Gentler mapping to reduce musical/metallic artifacts and preserve consonants.
+    // DeepFilterNet's attenuation is a denoising ceiling; higher is more aggressive.
+    df.setAttenuationLimit(6 + pct*0.45);
+    df.setPostFilterBeta(0);
     setStatus('Cleaning audio… keep this tab open.');
     await new Promise(r=>setTimeout(r,40));
     const enhanced=df.processAudio(input);
-    const wet=Math.min(.92,.68+pct/250);
-    const cleaned=blend(input,enhanced,wet);
+    // Keep a substantial amount of the original signal so the voice stays natural.
+    const wet=Math.min(.62,.28+pct*0.0048);
+    const cleaned0=blend(input,enhanced,wet);
+    const cleaned=await enhanceVoice(cleaned0,48000,Number(boost.value));
     const wav=makeWav(cleaned,48000);
     if(cleanedUrl)URL.revokeObjectURL(cleanedUrl); cleanedUrl=URL.createObjectURL(wav);
     after.src=cleanedUrl; download.href=cleanedUrl;
