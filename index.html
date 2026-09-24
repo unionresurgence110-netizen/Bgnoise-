@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b1020">
+<meta name="description" content="CleanVoice AI - private browser speech noise reduction powered by DeepFilterNet3 WASM.">
+<link rel="manifest" href="manifest.webmanifest">
+<title>CleanVoice AI</title>
+<style>
+:root{color-scheme:dark;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#080b14;color:#f5f7ff}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at top,#18213d 0,#0b1020 38%,#070a12 100%)}
+main{width:min(760px,100%);margin:auto;padding:28px 16px 44px}.brand{text-align:center;margin:12px 0 24px}.brand h1{font-size:34px;margin:0 0 7px}.brand p{margin:0;color:#aeb7cf}
+.card{background:rgba(18,24,42,.92);border:1px solid #2b3551;border-radius:22px;padding:20px;box-shadow:0 18px 60px rgba(0,0,0,.28);margin-bottom:16px}
+.drop{border:2px dashed #4d5d82;border-radius:18px;padding:25px 16px;text-align:center;cursor:pointer;background:#0e1527;transition:.2s}.drop:hover,.drop:focus-within{border-color:#7e9cff;background:#111a30}.drop strong{display:block;font-size:19px}.drop span{display:block;color:#9da8c2;margin-top:7px;font-size:14px}.drop input{display:block;width:100%;margin-top:18px}
+.fileinfo{margin-top:13px;padding:11px 12px;border-radius:12px;background:#0a0f1d;color:#cbd4e9;font-size:14px;display:none}.fileinfo.show{display:block}
+.row{display:flex;justify-content:space-between;align-items:center;gap:14px}.label{font-weight:700}.value{font-variant-numeric:tabular-nums;color:#b9c7ff}.range{width:100%;margin:18px 0 6px}.hint{color:#8f9ab4;font-size:13px;line-height:1.5}
+button{border:0;border-radius:13px;padding:13px 17px;font-weight:800;font-size:15px;cursor:pointer}.primary{width:100%;background:#728cff;color:white;margin-top:16px}.primary:disabled{opacity:.45;cursor:not-allowed}.secondary{background:#202a44;color:#dfe6ff}.status{margin-top:14px;min-height:22px;color:#aeb9d2;font-size:14px}.status.err{color:#ff9b9b}.status.ok{color:#8fe0b2}
+.results{display:none}.results.show{display:block}.players{display:grid;gap:14px}.player{background:#0b1120;border:1px solid #27324d;border-radius:15px;padding:13px}.player b{display:block;margin-bottom:7px;font-size:14px}audio{width:100%}.download{display:block;text-align:center;text-decoration:none;background:#263457;color:white;border-radius:13px;padding:13px;margin-top:14px;font-weight:800}
+.badge{display:inline-block;padding:5px 9px;border-radius:99px;background:#17213a;color:#aebfff;font-size:12px;margin-top:10px}.footer{text-align:center;color:#68748f;font-size:12px;line-height:1.6;margin-top:18px}
+</style>
+</head>
+<body>
+<main>
+  <section class="brand"><h1>CleanVoice AI</h1><p>Private speech noise reduction in your browser</p><span class="badge">DeepFilterNet3 • client-side WASM</span></section>
+
+  <section class="card">
+    <label class="drop" for="file">
+      <strong>Choose audio file</strong>
+      <span>MP3, WAV, M4A, OGG and other browser-supported audio • max 5 minutes</span>
+      <input id="file" type="file" accept="audio/*,.mp3,.wav,.m4a,.aac,.ogg,.opus,.flac,.webm">
+    </label>
+    <div id="fileinfo" class="fileinfo"></div>
+
+    <div class="row" style="margin-top:20px"><span class="label">Noise reduction</span><span id="levelValue" class="value">40%</span></div>
+    <input id="level" class="range" type="range" min="10" max="70" step="5" value="40">
+    <div class="hint">40% is a moderate setting intended to reduce fan, AC, hiss and room noise while keeping speech natural.</div>
+
+    <button id="process" class="primary" disabled>Clean my audio</button>
+    <div id="status" class="status">Select an audio file to begin.</div>
+  </section>
+
+  <section id="results" class="card results">
+    <h2 style="margin-top:0">Before / After</h2>
+    <div class="players">
+      <div class="player"><b>Original</b><audio id="before" controls></audio></div>
+      <div class="player"><b>Cleaned</b><audio id="after" controls></audio></div>
+    </div>
+    <a id="download" class="download" download="cleanvoice-cleaned.wav">Download cleaned WAV</a>
+  </section>
+
+  <div class="footer">Audio is processed locally in the browser after the model loads. Your selected recording is not uploaded to a CleanVoice server. The first load needs internet access for the processing library/model.</div>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const fileInput=$('file'), processBtn=$('process'), status=$('status'), fileInfo=$('fileinfo');
+const level=$('level'), levelValue=$('levelValue'), results=$('results'), before=$('before'), after=$('after'), download=$('download');
+let selected=null, originalUrl=null, cleanedUrl=null, audioCtx=null, denoiser=null;
+
+function setStatus(msg,kind=''){status.textContent=msg;status.className='status '+kind}
+function fmtBytes(n){if(n<1024)return n+' B';let u=['KB','MB','GB'],i=-1;do{n/=1024;i++}while(n>=1024&&i<u.length-1);return n.toFixed(1)+' '+u[i]}
+level.addEventListener('input',()=>levelValue.textContent=level.value+'%');
+fileInput.addEventListener('change',()=>{const f=fileInput.files?.[0]; if(!f)return; selectFile(f)});
+function selectFile(f){
+  selected=f; results.classList.remove('show'); processBtn.disabled=false;
+  fileInfo.textContent=f.name+' • '+fmtBytes(f.size); fileInfo.classList.add('show');
+  if(originalUrl)URL.revokeObjectURL(originalUrl); originalUrl=URL.createObjectURL(f); before.src=originalUrl;
+  setStatus('File selected. Ready to clean.','ok');
+}
+
+async function getCtx(){
+  if(!audioCtx) audioCtx=new (window.AudioContext||window.webkitAudioContext)({sampleRate:48000});
+  if(audioCtx.state==='suspended') await audioCtx.resume();
+  return audioCtx;
+}
+async function decode48Mono(blob){
+  const ab=await blob.arrayBuffer();
+  const ctx=await getCtx();
+  const decoded=await ctx.decodeAudioData(ab.slice(0));
+  if(decoded.duration>300.001) throw new Error('This file is longer than the 5 minute limit.');
+  const frames=Math.ceil(decoded.duration*48000);
+  const off=new OfflineAudioContext(1,frames,48000);
+  const src=off.createBufferSource(); src.buffer=decoded; src.connect(off.destination); src.start();
+  const rendered=await off.startRendering();
+  return new Float32Array(rendered.getChannelData(0));
+}
+async function loadDenoiser(){
+  if(denoiser?.isReady?.()) return denoiser;
+  setStatus('Loading DeepFilterNet3 model… first load can take a little while.');
+  const mod=await import('https://esm.sh/deepfilter-standalone@1.0.2');
+  const D=mod.StandaloneDeepFilter;
+  if(!D) throw new Error('DeepFilterNet3 module did not load correctly.');
+  denoiser=new D({attenuationLimit:30,postFilterBeta:0.02});
+  await denoiser.initialize();
+  return denoiser;
+}
+function makeWav(samples,sr=48000){
+  const buffer=new ArrayBuffer(44+samples.length*2),view=new DataView(buffer);
+  const ws=(o,s)=>{for(let i=0;i<s.length;i++)view.setUint8(o+i,s.charCodeAt(i))};
+  ws(0,'RIFF');view.setUint32(4,36+samples.length*2,true);ws(8,'WAVE');ws(12,'fmt ');view.setUint32(16,16,true);view.setUint16(20,1,true);view.setUint16(22,1,true);view.setUint32(24,sr,true);view.setUint32(28,sr*2,true);view.setUint16(32,2,true);view.setUint16(34,16,true);ws(36,'data');view.setUint32(40,samples.length*2,true);
+  let p=44;for(let i=0;i<samples.length;i++){let x=Math.max(-1,Math.min(1,samples[i]));view.setInt16(p,x<0?x*32768:x*32767,true);p+=2}return new Blob([buffer],{type:'audio/wav'});
+}
+function blend(input,enhanced,wet){
+  const n=Math.min(input.length,enhanced.length),out=new Float32Array(n);
+  for(let i=0;i<n;i++)out[i]=input[i]*(1-wet)+enhanced[i]*wet;
+  return out;
+}
+processBtn.addEventListener('click',async()=>{
+  if(!selected)return;
+  processBtn.disabled=true; results.classList.remove('show');
+  try{
+    const input=await decode48Mono(selected);
+    setStatus('Preparing DeepFilterNet3…');
+    const df=await loadDenoiser();
+    const pct=Number(level.value);
+    // Moderate mapping: slider 10–70 -> attenuation 10–52 dB.
+    df.setAttenuationLimit(10+(pct-10)*0.70);
+    df.setPostFilterBeta(pct>=55?0.015:0.02);
+    setStatus('Cleaning audio… keep this tab open.');
+    await new Promise(r=>setTimeout(r,40));
+    const enhanced=df.processAudio(input);
+    const wet=Math.min(.92,.68+pct/250);
+    const cleaned=blend(input,enhanced,wet);
+    const wav=makeWav(cleaned,48000);
+    if(cleanedUrl)URL.revokeObjectURL(cleanedUrl); cleanedUrl=URL.createObjectURL(wav);
+    after.src=cleanedUrl; download.href=cleanedUrl;
+    results.classList.add('show'); setStatus('Done — your cleaned audio is ready.','ok');
+  }catch(e){console.error(e);setStatus(e?.message||'Could not process this audio file. Try another browser-supported audio file.','err')}
+  finally{processBtn.disabled=false}
+});
+window.addEventListener('beforeunload',()=>{if(originalUrl)URL.revokeObjectURL(originalUrl);if(cleanedUrl)URL.revokeObjectURL(cleanedUrl);try{denoiser?.destroy?.()}catch{}});
+</script>
+</body>
+</html>
